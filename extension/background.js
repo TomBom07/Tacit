@@ -100,41 +100,113 @@ function waitForLoad(tabId, timeoutMs = 15000) {
   });
 }
 
+async function sendToTab(tabId, message) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch {
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    return chrome.tabs.sendMessage(tabId, message);
+  }
+}
+
+async function evaluateBranch(condition, tabId, variables) {
+  if (condition?.type === 'variableEquals') {
+    return Object.prototype.hasOwnProperty.call(variables, condition.name) &&
+      variables[condition.name] === condition.value;
+  }
+
+  const result = await sendToTab(tabId, {
+    type: 'TACIT_EVALUATE_CONDITION',
+    condition,
+    variables
+  });
+  if (!result?.ok) throw new Error(result?.reason || 'Could not evaluate branch condition.');
+  return Boolean(result.value);
+}
+
 async function executeRun(run) {
   const log = [];
-  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) throw new Error('No active tab for replay.');
+
+  const stepById = new Map((run.skill.steps || []).map((step) => [step.id, step]));
+  const program = run.skill.controlFlow?.program ||
+    (run.skill.steps || []).map((step) => ({ type: 'step', stepId: step.id }));
+  const cursor = { value: 0 };
 
   if (run.skill.startUrl && tab.url !== run.skill.startUrl) {
     await chrome.tabs.update(tab.id, { url: run.skill.startUrl });
     await waitForLoad(tab.id);
   }
 
-  for (let index = 0; index < run.skill.steps.length; index++) {
-    const step = run.skill.steps[index];
+  async function executeStep(step) {
+    const index = cursor.value++;
+    if (!step) throw new Error('Control-flow program references a missing step.');
+
     if (step.action === 'navigate') {
       await chrome.tabs.update(tab.id, { url: step.url });
       await waitForLoad(tab.id, step.timeoutMs || 15000);
-      log.push({ index, action: step.action, ok: true, url: step.url });
-      continue;
+      log.push({ index, stepId: step.id, action: step.action, ok: true, url: step.url });
+      return true;
     }
 
-    let result;
-    try {
-      result = await chrome.tabs.sendMessage(tab.id, { type: 'TACIT_EXECUTE_STEP', step, variables: run.variables || {} });
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 350));
-      result = await chrome.tabs.sendMessage(tab.id, { type: 'TACIT_EXECUTE_STEP', step, variables: run.variables || {} });
-    }
-    log.push({ index, action: step.action, ...result });
+    const result = await sendToTab(tab.id, {
+      type: 'TACIT_EXECUTE_STEP',
+      step,
+      variables: run.variables || {}
+    });
+
+    log.push({ index, stepId: step.id, action: step.action, ...result });
     if (!result?.ok) {
-      await api(`/runs/${run.id}/result`, { method: 'POST', body: JSON.stringify({ status: 'blocked', log, error: result?.reason || 'Replay blocked.' }) });
-      return;
+      await api(`/runs/${run.id}/result`, {
+        method: 'POST',
+        body: JSON.stringify({
+          status: 'blocked',
+          log,
+          error: result?.reason || 'Replay blocked.'
+        })
+      });
+      return false;
     }
+
     await new Promise((resolve) => setTimeout(resolve, 220));
+    return true;
   }
 
-  await api(`/runs/${run.id}/result`, { method: 'POST', body: JSON.stringify({ status: 'completed', log }) });
+  async function executeNodes(nodes) {
+    for (const node of nodes || []) {
+      if (node.type === 'step') {
+        if (!await executeStep(stepById.get(node.stepId))) return false;
+        continue;
+      }
+
+      if (node.type === 'repeat') {
+        for (let iteration = 0; iteration < node.count; iteration++) {
+          log.push({ control: 'repeat', iteration: iteration + 1, count: node.count, body: node.body });
+          for (const stepId of node.body || []) {
+            if (!await executeStep(stepById.get(stepId))) return false;
+          }
+        }
+        continue;
+      }
+
+      if (node.type === 'if') {
+        const matched = await evaluateBranch(node.condition, tab.id, run.variables || {});
+        log.push({ control: 'if', condition: node.condition, matched });
+        if (!await executeNodes(matched ? node.then : node.else)) return false;
+        continue;
+      }
+
+      throw new Error(`Unsupported control-flow node: ${node.type}`);
+    }
+    return true;
+  }
+
+  if (!await executeNodes(program)) return;
+  await api(`/runs/${run.id}/result`, {
+    method: 'POST',
+    body: JSON.stringify({ status: 'completed', log })
+  });
 }
 
 async function poll() {
