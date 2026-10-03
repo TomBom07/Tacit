@@ -4,7 +4,18 @@ import path from 'node:path';
 import { id } from './utils.js';
 
 function blankState() {
-  return { version: 1, recordings: [], skills: [], runs: [] };
+  return { version: 2, recordings: [], skills: [], runs: [], repairs: [] };
+}
+
+function normalizeState(state) {
+  return {
+    ...blankState(),
+    ...state,
+    recordings: state.recordings || [],
+    skills: state.skills || [],
+    runs: state.runs || [],
+    repairs: state.repairs || []
+  };
 }
 
 export class Store {
@@ -14,7 +25,7 @@ export class Store {
 
   async read() {
     try {
-      return JSON.parse(await fs.readFile(this.file, 'utf8'));
+      return normalizeState(JSON.parse(await fs.readFile(this.file, 'utf8')));
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
       return blankState();
@@ -45,6 +56,15 @@ export class Store {
     state.skills.push(skill);
     await this.write(state);
     return skill;
+  }
+
+  async updateSkill(skillId, nextSkill) {
+    const state = await this.read();
+    const index = state.skills.findIndex((item) => item.id === skillId);
+    if (index === -1) return null;
+    state.skills[index] = nextSkill;
+    await this.write(state);
+    return nextSkill;
   }
 
   async listSkills() {
@@ -92,5 +112,32 @@ export class Store {
     Object.assign(run, patch, { finishedAt: new Date().toISOString() });
     await this.write(state);
     return run;
+  }
+
+  async addRepair(repair) {
+    const state = await this.read();
+    state.repairs.push(repair);
+    await this.write(state);
+    return repair;
+  }
+
+  async getRepair(repairId) {
+    return (await this.read()).repairs.find((item) => item.id === repairId) || null;
+  }
+
+  async listRepairs({ skillId, status } = {}) {
+    return (await this.read()).repairs
+      .filter((item) => !skillId || item.skillId === skillId)
+      .filter((item) => !status || item.status === status)
+      .toReversed();
+  }
+
+  async updateRepair(repairId, patch) {
+    const state = await this.read();
+    const repair = state.repairs.find((item) => item.id === repairId);
+    if (!repair) return null;
+    Object.assign(repair, patch, { updatedAt: new Date().toISOString() });
+    await this.write(state);
+    return repair;
   }
 }
