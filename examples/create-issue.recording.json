@@ -1,0 +1,20 @@
+{
+  "name": "Create issue",
+  "startUrl": "https://example.com/issues/new",
+  "events": [
+    {
+      "action": "input",
+      "locator": { "tag": "input", "label": "Title", "role": "textbox" },
+      "value": "Fix checkout regression"
+    },
+    {
+      "action": "input",
+      "locator": { "tag": "textarea", "label": "Description", "role": "textbox" },
+      "value": "The checkout button fails after applying a coupon."
+    },
+    {
+      "action": "click",
+      "locator": { "tag": "button", "role": "button", "name": "Create issue", "text": "Create issue" }
+    }
+  ]
+}
