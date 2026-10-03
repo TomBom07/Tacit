@@ -109,6 +109,49 @@ export function createTacitServer({ store = new Store() } = {}) {
         return json(res, 200, { run, repair });
       }
 
+      if (req.method === 'GET' && url.pathname === '/repairs') {
+        return json(res, 200, {
+          repairs: await store.listRepairs({
+            skillId: url.searchParams.get('skillId') || undefined,
+            status: url.searchParams.get('status') || undefined
+          })
+        });
+      }
+
+      if (req.method === 'GET' && parts[0] === 'repairs' && parts[1]) {
+        const repair = await store.getRepair(parts[1]);
+        return repair ? json(res, 200, { repair }) : json(res, 404, { error: 'Repair not found.' });
+      }
+
+      if (req.method === 'POST' && parts[0] === 'repairs' && parts[1] && parts[2] === 'apply') {
+        const input = await readJson(req);
+        if (input.approved !== true) {
+          return json(res, 400, { error: 'Explicit approved=true is required.' });
+        }
+
+        const repair = await store.getRepair(parts[1]);
+        if (!repair) return json(res, 404, { error: 'Repair not found.' });
+
+        const skill = await store.getSkill(repair.skillId);
+        if (!skill) return json(res, 404, { error: 'Skill not found.' });
+
+        const repaired = applyRepair(skill, repair);
+        await store.updateSkill(skill.id, repaired);
+        const applied = await store.updateRepair(repair.id, {
+          status: 'applied',
+          appliedAt: new Date().toISOString()
+        });
+        return json(res, 200, { skill: repaired, repair: applied });
+      }
+
+      if (req.method === 'POST' && parts[0] === 'repairs' && parts[1] && parts[2] === 'reject') {
+        const repair = await store.updateRepair(parts[1], {
+          status: 'rejected',
+          rejectedAt: new Date().toISOString()
+        });
+        return repair ? json(res, 200, { repair }) : json(res, 404, { error: 'Repair not found.' });
+      }
+
       return json(res, 404, { error: 'Not found.' });
     } catch (error) {
       return json(res, 500, { error: error.message });
