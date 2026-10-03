@@ -51,8 +51,10 @@ export function rankCandidates(locator, candidates = []) {
 export function chooseCandidate(locator, candidates, threshold = 0.58) {
   const ranked = rankCandidates(locator, candidates);
   const best = ranked[0];
-  if (!best || best.score < threshold) {
-    return { match: null, confidence: best?.score ?? 0, ranked: ranked.slice(0, 5) };
+  const second = ranked[1];
+  const ambiguous = Boolean(best && second && best.score >= threshold && second.score >= threshold && best.score - second.score < 0.05);
+  if (!best || best.score < threshold || ambiguous) {
+    return { match: null, confidence: best?.score ?? 0, ambiguous, ranked: ranked.slice(0, 5) };
   }
-  return { match: best.candidate, confidence: best.score, ranked: ranked.slice(0, 5) };
+  return { match: best.candidate, confidence: best.score, ambiguous: false, ranked: ranked.slice(0, 5) };
 }
