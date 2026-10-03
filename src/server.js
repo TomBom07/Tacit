@@ -1,7 +1,9 @@
 import http from 'node:http';
-import { compileRecording } from './compiler.js';
+import { compileRecordingWithAI } from './compiler.js';
 import { Store } from './store.js';
 import { skillToToolDefinition } from './tool-definition.js';
+import { proposeRepair, applyRepair } from './repair.js';
+import { assertRunConfirmed } from './policy.js';
 
 function json(res, status, value) {
   const body = JSON.stringify(value, null, 2);
@@ -40,7 +42,7 @@ export function createTacitServer({ store = new Store() } = {}) {
       if (req.method === 'POST' && url.pathname === '/recordings') {
         const input = await readJson(req);
         const recording = await store.addRecording(input);
-        const skill = compileRecording(recording);
+        const skill = await compileRecordingWithAI(recording);
         await store.addSkill(skill);
         return json(res, 201, { recording, skill });
       }
@@ -49,7 +51,7 @@ export function createTacitServer({ store = new Store() } = {}) {
         const input = await readJson(req);
         const recording = input.recordingId ? await store.getRecording(input.recordingId) : input.recording;
         if (!recording) return json(res, 404, { error: 'Recording not found.' });
-        const skill = compileRecording(recording);
+        const skill = await compileRecordingWithAI(recording);
         await store.addSkill(skill);
         return json(res, 201, { skill });
       }
