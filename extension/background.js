@@ -66,10 +66,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'TACIT_STOP') {
     restoreSession().then(async () => {
       const finished = session;
-      session = null;
-      await persistSession();
       if (!finished) { sendResponse({ ok: false, error: 'Nothing is being recorded.' }); return; }
       const { skill } = await api('/recordings', { method: 'POST', body: JSON.stringify(finished) });
+      session = null;
+      await persistSession();
       await chrome.storage.local.set({ lastSkill: skill });
       sendResponse({ ok: true, skill });
     }).catch((error) => sendResponse({ ok: false, error: error.message }));
@@ -142,7 +142,17 @@ async function poll() {
   polling = true;
   try {
     const { run } = await api('/runs/next');
-    if (run) await executeRun(run);
+    if (run) {
+      try {
+        await executeRun(run);
+      } catch (error) {
+        await api(`/runs/${run.id}/result`, {
+          method: 'POST',
+          body: JSON.stringify({ status: 'failed', log: [], error: error.message })
+        }).catch(() => {});
+        throw error;
+      }
+    }
   } catch (error) {
     console.debug('[Tacit]', error.message);
   } finally {
