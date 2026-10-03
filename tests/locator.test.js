@@ -10,3 +10,13 @@ test('semantic fields can recover from id changes', () => {
   assert.ok(scoreLocator(expected, changed) > scoreLocator(expected, unrelated));
   assert.equal(chooseCandidate(expected, [unrelated, changed]).match, changed);
 });
+
+
+test('refuses ambiguous high-confidence matches instead of guessing', () => {
+  const expected = { role: 'button', name: 'Continue', text: 'Continue' };
+  const first = { role: 'button', name: 'Continue', text: 'Continue' };
+  const second = { role: 'button', name: 'Continue', text: 'Continue' };
+  const result = chooseCandidate(expected, [first, second]);
+  assert.equal(result.match, null);
+  assert.equal(result.ambiguous, true);
+});
