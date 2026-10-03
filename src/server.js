@@ -67,6 +67,18 @@ export function createTacitServer({ store = new Store() } = {}) {
         const input = await readJson(req);
         const skill = await store.getSkill(input.skillId);
         if (!skill) return json(res, 404, { error: 'Skill not found.' });
+        try {
+          assertRunConfirmed(skill, input.confirmed === true);
+        } catch (error) {
+          if (error.code === 'CONFIRMATION_REQUIRED') {
+            return json(res, 409, {
+              error: error.message,
+              confirmationRequired: true,
+              effects: error.effects
+            });
+          }
+          throw error;
+        }
         const run = await store.queueRun(skill, input.variables || {});
         return json(res, 202, { run });
       }
