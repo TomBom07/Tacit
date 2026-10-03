@@ -19,9 +19,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
+      - run: npm install --ignore-scripts
       - run: npm test
       - run: node --check src/cli.js
       - run: node --check src/server.js
+      - run: node --check src/mcp.js
+      - run: node -e "import('./src/mcp.js').then(() => console.log('MCP module loads'))"
       - run: node --check extension/background.js
       - run: node --check extension/content.js
       - run: node --check extension/popup.js
