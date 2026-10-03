@@ -24,7 +24,10 @@ export function skillToToolDefinition(skill) {
     metadata: {
       skillId: skill.id,
       startUrl: skill.startUrl,
-      steps: skill.steps.length
+      steps: skill.steps.length,
+      revision: skill.revision || 1,
+      effects: skill.semantics?.effects || [],
+      confirmationEffects: skill.semantics?.confirmationEffects || []
     }
   };
 }
