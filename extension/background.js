@@ -177,11 +177,17 @@ async function executeRun(run) {
     const index = cursor.value++;
     if (!step) throw new Error('Control-flow program references a missing step.');
 
+    const latest = await api(`/runs/${run.id}`);
+    if (latest.run?.status === 'cancelled') {
+      log.push({ index, stepId: step.id, action: step.action, cancelled: true });
+      return 'cancelled';
+    }
+
     if (step.action === 'navigate') {
       await chrome.tabs.update(tab.id, { url: step.url });
       await waitForLoad(tab.id, step.timeoutMs || 15000);
       log.push({ index, stepId: step.id, action: step.action, ok: true, url: step.url });
-      return true;
+      return 'ok';
     }
 
     const result = await sendToTab(tab.id, {
@@ -200,17 +206,18 @@ async function executeRun(run) {
           error: result?.reason || 'Replay blocked.'
         })
       });
-      return false;
+      return 'blocked';
     }
 
     await new Promise((resolve) => setTimeout(resolve, 220));
-    return true;
+    return 'ok';
   }
 
   async function executeNodes(nodes) {
     for (const node of nodes || []) {
       if (node.type === 'step') {
-        if (!await executeStep(stepById.get(node.stepId))) return false;
+        const status = await executeStep(stepById.get(node.stepId));
+        if (status !== 'ok') return status;
         continue;
       }
 
@@ -218,7 +225,8 @@ async function executeRun(run) {
         for (let iteration = 0; iteration < node.count; iteration++) {
           log.push({ control: 'repeat', iteration: iteration + 1, count: node.count, body: node.body });
           for (const stepId of node.body || []) {
-            if (!await executeStep(stepById.get(stepId))) return false;
+            const status = await executeStep(stepById.get(stepId));
+            if (status !== 'ok') return status;
           }
         }
         continue;
@@ -227,16 +235,18 @@ async function executeRun(run) {
       if (node.type === 'if') {
         const matched = await evaluateBranch(node.condition, tab.id, run.variables || {});
         log.push({ control: 'if', condition: node.condition, matched });
-        if (!await executeNodes(matched ? node.then : node.else)) return false;
+        const status = await executeNodes(matched ? node.then : node.else);
+        if (status !== 'ok') return status;
         continue;
       }
 
       throw new Error(`Unsupported control-flow node: ${node.type}`);
     }
-    return true;
+    return 'ok';
   }
 
-  if (!await executeNodes(program)) return;
+  const outcome = await executeNodes(program);
+  if (outcome !== 'ok') return;
   await api(`/runs/${run.id}/result`, {
     method: 'POST',
     body: JSON.stringify({ status: 'completed', log })
