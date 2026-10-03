@@ -1,5 +1,7 @@
 import { assertRecording } from './model.js';
 import { compactObject, id, slugify } from './utils.js';
+import { enrichSkillSemantics } from './intent.js';
+import { enhanceSkillWithAI } from './ai-compiler.js';
 
 function parameterName(locator = {}, index = 0) {
   const seed = locator.label || locator.name || locator.placeholder || locator.id || `input_${index + 1}`;
@@ -69,8 +71,8 @@ export function compileRecording(rawRecording) {
   const name = recording.name || 'Untitled workflow';
   const now = new Date().toISOString();
 
-  return {
-    schemaVersion: 1,
+  return enrichSkillSemantics({
+    schemaVersion: 2,
     id: id('skill'),
     name,
     slug: slugify(name),
@@ -88,6 +90,16 @@ export function compileRecording(rawRecording) {
       locatorThreshold: 0.58,
       stopOnAmbiguity: true,
       requireConfirmationFor: ['purchase', 'send', 'delete', 'publish']
+    },
+    revision: 1,
+    compiler: {
+      deterministic: true,
+      ai: { status: 'pending' }
     }
-  };
+  });
+}
+
+export async function compileRecordingWithAI(rawRecording, options = {}) {
+  const deterministic = compileRecording(rawRecording);
+  return enhanceSkillWithAI(deterministic, options);
 }
