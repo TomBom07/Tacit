@@ -17,6 +17,7 @@ function compileValue(event, variables, index) {
     type: 'string',
     description: event.locator?.label || event.locator?.name || event.locator?.placeholder || 'Recorded input',
     required: Boolean(isSensitive),
+    secret: Boolean(isSensitive),
     default: isSensitive ? undefined : event.value
   });
 
