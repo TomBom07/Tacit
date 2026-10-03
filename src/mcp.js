@@ -37,25 +37,86 @@ function skillSchema(skill) {
   return z.object(shape).strict();
 }
 
-function uniqueToolName(skill, used) {
-  const base = `tacit_${slugify(skill.name)}`.slice(0, 56) || 'tacit_skill';
-  let name = base;
-  if (used.has(name)) name = `${base.slice(0, 49)}_${skill.id.slice(-6)}`;
-  used.add(name);
-  return name;
+function toolName(skill) {
+  const base = slugify(skill.name).replace(/_/g, '-').slice(0, 42) || 'skill';
+  return `tacit_${base}_${skill.id.slice(-6)}`.slice(0, 64);
+}
+
+function skillFingerprint(skill) {
+  return JSON.stringify({
+    id: skill.id,
+    revision: skill.revision || 1,
+    updatedAt: skill.updatedAt,
+    name: skill.name,
+    description: skill.description,
+    variables: skill.variables,
+    semantics: skill.semantics
+  });
+}
+
+function registerSkillTool(server, store, skill) {
+  const name = toolName(skill);
+  const effects = confirmationEffects(skill);
+
+  const handle = server.registerTool(
+    name,
+    {
+      title: skill.name,
+      description: skill.description,
+      inputSchema: skillSchema(skill),
+      annotations: {
+        destructiveHint: effects.some((effect) => ['delete', 'purchase', 'publish', 'send'].includes(effect)),
+        openWorldHint: true,
+        idempotentHint: false
+      }
+    },
+    async (args) => {
+      const latest = await store.getSkill(skill.id);
+      if (!latest) {
+        return { content: [{ type: 'text', text: 'This Tacit skill no longer exists.' }], isError: true };
+      }
+
+      const { _confirm = false, ...variables } = args || {};
+      try {
+        assertRunConfirmed(latest, _confirm);
+        const run = await store.queueRun(latest, variables);
+        const result = {
+          runId: run.id,
+          skillId: latest.id,
+          revision: latest.revision || 1,
+          status: run.status,
+          message: 'Queued. The local Tacit browser extension will claim this run.'
+        };
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          structuredContent: result
+        };
+      } catch (error) {
+        return {
+          content: [{ type: 'text', text: error.message }],
+          isError: true
+        };
+      }
+    }
+  );
+
+  return { name, handle, fingerprint: skillFingerprint(skill) };
 }
 
 export function createMcpServer({ store = new Store(), skills = [] } = {}) {
   const server = new McpServer(
-    { name: 'tacit', version: '0.2.0' },
+    { name: 'tacit', version: '0.3.0' },
     {
       instructions: [
         'Tacit exposes browser procedures learned from human demonstrations.',
         'A tool call queues a browser run for the local Tacit extension.',
-        'Never set _confirm=true unless the user has explicitly confirmed the listed external effect.'
+        'Never set _confirm=true unless the user has explicitly confirmed the listed external effect.',
+        'Skill tools can change while the server is running; refresh the tool list when notified.'
       ].join(' ')
     }
   );
+
+  const skillTools = new Map();
 
   server.registerTool(
     'tacit_list_skills',
@@ -65,9 +126,10 @@ export function createMcpServer({ store = new Store(), skills = [] } = {}) {
       annotations: { readOnlyHint: true }
     },
     async () => {
-      const skills = await store.listSkills();
-      const summary = skills.map((skill) => ({
+      const current = await store.listSkills();
+      const summary = current.map((skill) => ({
         id: skill.id,
+        toolName: toolName(skill),
         name: skill.name,
         description: skill.description,
         revision: skill.revision || 1,
@@ -77,6 +139,33 @@ export function createMcpServer({ store = new Store(), skills = [] } = {}) {
         content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }],
         structuredContent: { skills: summary }
       };
+    }
+  );
+
+  server.registerTool(
+    'tacit_run_skill',
+    {
+      description: 'Queue any Tacit skill by ID or slug. Prefer a dedicated learned-skill tool when available.',
+      inputSchema: z.object({
+        skillId: z.string().min(1),
+        variables: z.record(z.string(), z.unknown()).optional(),
+        confirmed: z.boolean().optional().describe('Only true after explicit user confirmation of external effects.')
+      }).strict()
+    },
+    async ({ skillId, variables = {}, confirmed = false }) => {
+      const skill = await store.getSkill(skillId);
+      if (!skill) return { content: [{ type: 'text', text: 'Skill not found.' }], isError: true };
+      try {
+        assertRunConfirmed(skill, confirmed);
+        const run = await store.queueRun(skill, variables);
+        const result = { runId: run.id, skillId: skill.id, status: run.status };
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          structuredContent: result
+        };
+      } catch (error) {
+        return { content: [{ type: 'text', text: error.message }], isError: true };
+      }
     }
   );
 
@@ -97,54 +186,56 @@ export function createMcpServer({ store = new Store(), skills = [] } = {}) {
     }
   );
 
-  const used = new Set(['tacit_list_skills', 'tacit_get_run']);
   for (const skill of skills) {
-    const name = uniqueToolName(skill, used);
-    const effects = confirmationEffects(skill);
-    server.registerTool(
-      name,
-      {
-        title: skill.name,
-        description: skill.description,
-        inputSchema: skillSchema(skill),
-        annotations: {
-          destructiveHint: effects.some((effect) => ['delete', 'purchase', 'publish', 'send'].includes(effect)),
-          openWorldHint: true,
-          idempotentHint: false
-        }
-      },
-      async (args) => {
-        const { _confirm = false, ...variables } = args || {};
-        try {
-          assertRunConfirmed(skill, _confirm);
-          const run = await store.queueRun(skill, variables);
-          const result = {
-            runId: run.id,
-            skillId: skill.id,
-            status: run.status,
-            message: 'Queued. The local Tacit browser extension will claim this run.'
-          };
-          return {
-            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-            structuredContent: result
-          };
-        } catch (error) {
-          return {
-            content: [{ type: 'text', text: error.message }],
-            isError: true
-          };
-        }
-      }
-    );
+    skillTools.set(skill.id, registerSkillTool(server, store, skill));
   }
 
+  server.tacitSkillTools = skillTools;
   return server;
+}
+
+export function startSkillSync(server, store, { intervalMs = 1000 } = {}) {
+  const handles = server.tacitSkillTools || new Map();
+
+  const sync = async () => {
+    const skills = await store.listSkills();
+    const liveIds = new Set(skills.map((skill) => skill.id));
+
+    for (const [skillId, registered] of handles) {
+      if (!liveIds.has(skillId)) {
+        registered.handle.remove();
+        handles.delete(skillId);
+      }
+    }
+
+    for (const skill of skills) {
+      const fingerprint = skillFingerprint(skill);
+      const existing = handles.get(skill.id);
+      if (existing?.fingerprint === fingerprint) continue;
+
+      if (existing) existing.handle.remove();
+      handles.set(skill.id, registerSkillTool(server, store, skill));
+    }
+  };
+
+  const timer = setInterval(() => sync().catch((error) => {
+    console.error('[Tacit MCP sync]', error.message);
+  }), intervalMs);
+  timer.unref?.();
+
+  return {
+    sync,
+    stop: () => clearInterval(timer)
+  };
 }
 
 export async function startMcpServer(options = {}) {
   const store = options.store || new Store();
   const skills = await store.listSkills();
-  await serveStdio(() => createMcpServer({ store, skills }));
+  const server = createMcpServer({ store, skills });
+  const watcher = startSkillSync(server, store, { intervalMs: options.intervalMs || 1000 });
+  await watcher.sync();
+  await serveStdio(() => server);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
