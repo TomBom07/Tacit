@@ -5,9 +5,11 @@ import { exportAgentBundle } from './exporter.js';
 import { assertRunConfirmed } from './policy.js';
 import fs from 'node:fs/promises';
 import { createSkillBundle, parseSkillBundle } from './skill-io.js';
+import { createRuntimeClient } from './client.js';
 
 const [command = 'help', ...args] = process.argv.slice(2);
 const store = new Store();
+const runtime = createRuntimeClient();
 
 function print(value) {
   process.stdout.write(`${typeof value === 'string' ? value : JSON.stringify(value, null, 2)}\n`);
@@ -53,7 +55,7 @@ async function main() {
       const confirmed = args.includes('--confirm');
       assertRunConfirmed(skill, confirmed);
       const variables = parseVariables(args.slice(1).filter((entry) => entry !== '--confirm'));
-      const run = await store.queueRun(skill, variables);
+      const { run } = await runtime.queueRun(skill.id, variables, confirmed);
       print(`Queued ${run.id}. Keep Chrome open with the Tacit extension enabled.`);
       return;
     }
@@ -61,7 +63,7 @@ async function main() {
       const statusIndex = args.indexOf('--status');
       const skillIndex = args.indexOf('--skill');
       const limitIndex = args.indexOf('--limit');
-      const runs = await store.listRuns({
+      const { runs } = await runtime.listRuns({
         status: statusIndex >= 0 ? args[statusIndex + 1] : undefined,
         skillId: skillIndex >= 0 ? args[skillIndex + 1] : undefined,
         limit: limitIndex >= 0 ? Number(args[limitIndex + 1]) : undefined
@@ -71,8 +73,7 @@ async function main() {
       return;
     }
     case 'cancel': {
-      const run = await store.cancelRun(args[0]);
-      if (!run) throw new Error('Run not found.');
+      const { run } = await runtime.cancelRun(args[0]);
       print(`${run.id}: ${run.status}`);
       return;
     }
