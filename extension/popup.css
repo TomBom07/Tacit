@@ -9,6 +9,7 @@ header span { color: #85888c; font-size: 11px; }
 .status { color: #555; font-size: 20px; }
 .status.online { color: #9cff57; }
 section { border: 1px solid #202225; background: #111315; border-radius: 16px; padding: 16px; }
+section + section { margin-top: 10px; }
 p { color: #a7aaae; font-size: 13px; line-height: 1.5; margin: 0 0 16px; }
 label { display: block; color: #777b80; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
 input { width: 100%; margin-top: 7px; border: 1px solid #2a2d31; border-radius: 11px; background: #0b0c0d; color: white; padding: 11px 12px; outline: none; }
@@ -22,3 +23,14 @@ h2 { margin: 7px 0 5px; font-size: 17px; }
 #skillMeta { margin: 0; }
 footer { display: flex; justify-content: space-between; align-items: center; color: #5d6166; font-size: 10px; padding-top: 14px; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.sectionHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.count { color: #6f7378; font-size: 10px; }
+.repairCard { border-top: 1px solid #23262a; padding: 12px 0 2px; }
+.repairCard:first-child { border-top: 0; padding-top: 0; }
+.repairTitle { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; font-size: 12px; font-weight: 700; }
+.repairConfidence { color: #8a8e93; font-size: 10px; font-weight: 500; }
+.repairDiff { margin: 7px 0 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; color: #8f9499; line-height: 1.45; word-break: break-word; }
+.repairActions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.repairActions button { margin-top: 0; padding: 8px; font-size: 11px; }
+.repairActions .reject { background: transparent; color: #a7aaae; border: 1px solid #2c2f33; }
