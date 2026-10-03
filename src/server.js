@@ -97,7 +97,16 @@ export function createTacitServer({ store = new Store() } = {}) {
         const allowed = new Set(['completed', 'blocked', 'failed']);
         if (!allowed.has(input.status)) return json(res, 400, { error: 'Invalid run status.' });
         const run = await store.finishRun(parts[1], { status: input.status, log: input.log || [], error: input.error || null });
-        return run ? json(res, 200, { run }) : json(res, 404, { error: 'Run not found.' });
+        if (!run) return json(res, 404, { error: 'Run not found.' });
+
+        let repair = null;
+        if (run.status === 'blocked') {
+          const skill = await store.getSkill(run.skillId);
+          repair = skill ? proposeRepair(skill, run) : null;
+          if (repair) await store.addRepair(repair);
+        }
+
+        return json(res, 200, { run, repair });
       }
 
       return json(res, 404, { error: 'Not found.' });
