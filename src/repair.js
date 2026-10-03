@@ -6,9 +6,13 @@ function firstFailure(run) {
 
 export function proposeRepair(skill, run) {
   const failure = firstFailure(run);
-  if (!failure || !Number.isInteger(failure.index)) return null;
+  if (!failure) return null;
 
-  const step = skill.steps[failure.index];
+  const step = failure.stepId
+    ? skill.steps.find((item) => item.id === failure.stepId)
+    : Number.isInteger(failure.index)
+      ? skill.steps[failure.index]
+      : null;
   if (!step?.locator) return null;
 
   const candidates = Array.isArray(failure.candidates) ? failure.candidates : [];
@@ -25,7 +29,7 @@ export function proposeRepair(skill, run) {
     skillId: skill.id,
     runId: run.id,
     stepId: step.id,
-    stepIndex: failure.index,
+    stepIndex: skill.steps.findIndex((item) => item.id === step.id),
     status: 'pending',
     createdAt: new Date().toISOString(),
     before: step.locator,
