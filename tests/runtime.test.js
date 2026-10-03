@@ -73,3 +73,41 @@ test('secret run variables never reach persistent store.json', async () => {
     assert.ok(!afterClaim.includes('super-secret-value'));
   });
 });
+
+
+test('cancelled runs are not claimed or overwritten by late results', async () => {
+  await withServer(async ({ store }) => {
+    const skill = { id: 'skill_cancel', slug: 'cancel', name: 'Cancel demo', variables: {}, steps: [] };
+
+    const queued = await store.queueRun(skill, {});
+    const cancelledQueued = await store.cancelRun(queued.id);
+    assert.equal(cancelledQueued.status, 'cancelled');
+    assert.equal(await store.claimNextRun(), null);
+
+    const running = await store.queueRun(skill, {});
+    const claimed = await store.claimNextRun();
+    assert.equal(claimed.id, running.id);
+    assert.equal(claimed.status, 'running');
+
+    const cancelledRunning = await store.cancelRun(running.id);
+    assert.equal(cancelledRunning.status, 'cancelled');
+
+    const late = await store.finishRun(running.id, { status: 'completed', log: [{ ok: true }] });
+    assert.equal(late.status, 'cancelled');
+  });
+});
+
+test('HTTP API lists and cancels runs', async () => {
+  await withServer(async ({ base, store }) => {
+    const skill = { id: 'skill_http_cancel', slug: 'http_cancel', name: 'HTTP cancel', variables: {}, steps: [] };
+    const run = await store.queueRun(skill, {});
+
+    const listed = await fetch(`${base}/runs`);
+    assert.equal(listed.status, 200);
+    assert.ok((await listed.json()).runs.some((item) => item.id === run.id));
+
+    const cancelled = await fetch(`${base}/runs/${run.id}/cancel`, { method: 'POST' });
+    assert.equal(cancelled.status, 200);
+    assert.equal((await cancelled.json()).run.status, 'cancelled');
+  });
+});
