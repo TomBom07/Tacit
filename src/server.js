@@ -96,12 +96,27 @@ export function createTacitServer({ store = new Store() } = {}) {
         return reply(202, { run });
       }
 
+      if (req.method === 'GET' && url.pathname === '/runs') {
+        return reply(200, {
+          runs: await store.listRuns({
+            status: url.searchParams.get('status') || undefined,
+            skillId: url.searchParams.get('skillId') || undefined,
+            limit: url.searchParams.get('limit') || undefined
+          })
+        });
+      }
+
       if (req.method === 'GET' && url.pathname === '/runs/next') {
         return reply(200, { run: await store.claimNextRun() });
       }
 
       if (req.method === 'GET' && parts[0] === 'runs' && parts[1]) {
         const run = await store.getRun(parts[1]);
+        return run ? reply(200, { run }) : reply(404, { error: 'Run not found.' });
+      }
+
+      if (req.method === 'POST' && parts[0] === 'runs' && parts[1] && parts[2] === 'cancel') {
+        const run = await store.cancelRun(parts[1]);
         return run ? reply(200, { run }) : reply(404, { error: 'Run not found.' });
       }
 
