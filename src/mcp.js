@@ -3,7 +3,8 @@ import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import * as z from 'zod/v4';
 import { Store } from './store.js';
 import { slugify } from './utils.js';
-import { confirmationEffects, requiresConfirmation, assertRunConfirmed } from './policy.js';
+import { confirmationEffects, requiresConfirmation } from './policy.js';
+import { createRuntimeClient } from './client.js';
 
 function variableSchema(variable = {}) {
   let schema;
@@ -54,7 +55,14 @@ function skillFingerprint(skill) {
   });
 }
 
-function registerSkillTool(server, store, skill) {
+function toolError(error) {
+  return {
+    content: [{ type: 'text', text: error.message }],
+    isError: true
+  };
+}
+
+function registerSkillTool(server, store, runtime, skill) {
   const name = toolName(skill);
   const effects = confirmationEffects(skill);
 
@@ -78,24 +86,20 @@ function registerSkillTool(server, store, skill) {
 
       const { _confirm = false, ...variables } = args || {};
       try {
-        assertRunConfirmed(latest, _confirm);
-        const run = await store.queueRun(latest, variables);
+        const { run } = await runtime.queueRun(latest.id, variables, _confirm);
         const result = {
           runId: run.id,
           skillId: latest.id,
           revision: latest.revision || 1,
           status: run.status,
-          message: 'Queued. The local Tacit browser extension will claim this run.'
+          message: 'Queued in the persistent Tacit runtime. The browser extension will claim this run.'
         };
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
           structuredContent: result
         };
       } catch (error) {
-        return {
-          content: [{ type: 'text', text: error.message }],
-          isError: true
-        };
+        return toolError(error);
       }
     }
   );
@@ -103,13 +107,17 @@ function registerSkillTool(server, store, skill) {
   return { name, handle, fingerprint: skillFingerprint(skill) };
 }
 
-export function createMcpServer({ store = new Store(), skills = [] } = {}) {
+export function createMcpServer({
+  store = new Store(),
+  skills = [],
+  runtime = createRuntimeClient()
+} = {}) {
   const server = new McpServer(
     { name: 'tacit', version: '0.3.0' },
     {
       instructions: [
         'Tacit exposes browser procedures learned from human demonstrations.',
-        'A tool call queues a browser run for the local Tacit extension.',
+        'Run operations go through the persistent local Tacit HTTP runtime so ephemeral secrets stay in the runner process.',
         'Never set _confirm=true unless the user has explicitly confirmed the listed external effect.',
         'Skill tools can change while the server is running; refresh the tool list when notified.'
       ].join(' ')
@@ -156,15 +164,14 @@ export function createMcpServer({ store = new Store(), skills = [] } = {}) {
       const skill = await store.getSkill(skillId);
       if (!skill) return { content: [{ type: 'text', text: 'Skill not found.' }], isError: true };
       try {
-        assertRunConfirmed(skill, confirmed);
-        const run = await store.queueRun(skill, variables);
+        const { run } = await runtime.queueRun(skill.id, variables, confirmed);
         const result = { runId: run.id, skillId: skill.id, status: run.status };
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
           structuredContent: result
         };
       } catch (error) {
-        return { content: [{ type: 'text', text: error.message }], isError: true };
+        return toolError(error);
       }
     }
   );
@@ -181,11 +188,15 @@ export function createMcpServer({ store = new Store(), skills = [] } = {}) {
       annotations: { readOnlyHint: true }
     },
     async ({ status, skillId, limit }) => {
-      const runs = await store.listRuns({ status, skillId, limit });
-      return {
-        content: [{ type: 'text', text: JSON.stringify(runs, null, 2) }],
-        structuredContent: { runs }
-      };
+      try {
+        const { runs } = await runtime.listRuns({ status, skillId, limit });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(runs, null, 2) }],
+          structuredContent: { runs }
+        };
+      } catch (error) {
+        return toolError(error);
+      }
     }
   );
 
@@ -197,13 +208,16 @@ export function createMcpServer({ store = new Store(), skills = [] } = {}) {
       annotations: { destructiveHint: false, idempotentHint: true }
     },
     async ({ runId }) => {
-      const run = await store.cancelRun(runId);
-      if (!run) return { content: [{ type: 'text', text: 'Run not found.' }], isError: true };
-      const result = { runId: run.id, status: run.status };
-      return {
-        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-        structuredContent: result
-      };
+      try {
+        const { run } = await runtime.cancelRun(runId);
+        const result = { runId: run.id, status: run.status };
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          structuredContent: result
+        };
+      } catch (error) {
+        return toolError(error);
+      }
     }
   );
 
@@ -215,25 +229,30 @@ export function createMcpServer({ store = new Store(), skills = [] } = {}) {
       annotations: { readOnlyHint: true }
     },
     async ({ runId }) => {
-      const run = await store.getRun(runId);
-      if (!run) return { content: [{ type: 'text', text: 'Run not found.' }], isError: true };
-      return {
-        content: [{ type: 'text', text: JSON.stringify(run, null, 2) }],
-        structuredContent: { run }
-      };
+      try {
+        const { run } = await runtime.getRun(runId);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(run, null, 2) }],
+          structuredContent: { run }
+        };
+      } catch (error) {
+        return toolError(error);
+      }
     }
   );
 
   for (const skill of skills) {
-    skillTools.set(skill.id, registerSkillTool(server, store, skill));
+    skillTools.set(skill.id, registerSkillTool(server, store, runtime, skill));
   }
 
   server.tacitSkillTools = skillTools;
+  server.tacitRuntime = runtime;
   return server;
 }
 
 export function startSkillSync(server, store, { intervalMs = 1000 } = {}) {
   const handles = server.tacitSkillTools || new Map();
+  const runtime = server.tacitRuntime || createRuntimeClient();
 
   const sync = async () => {
     const skills = await store.listSkills();
@@ -252,7 +271,7 @@ export function startSkillSync(server, store, { intervalMs = 1000 } = {}) {
       if (existing?.fingerprint === fingerprint) continue;
 
       if (existing) existing.handle.remove();
-      handles.set(skill.id, registerSkillTool(server, store, skill));
+      handles.set(skill.id, registerSkillTool(server, store, runtime, skill));
     }
   };
 
@@ -269,8 +288,9 @@ export function startSkillSync(server, store, { intervalMs = 1000 } = {}) {
 
 export async function startMcpServer(options = {}) {
   const store = options.store || new Store();
+  const runtime = options.runtime || createRuntimeClient(options.runtimeUrl);
   const skills = await store.listSkills();
-  const server = createMcpServer({ store, skills });
+  const server = createMcpServer({ store, skills, runtime });
   const watcher = startSkillSync(server, store, { intervalMs: options.intervalMs || 1000 });
   await watcher.sync();
   await serveStdio(() => server);
