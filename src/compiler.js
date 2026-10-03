@@ -2,6 +2,7 @@ import { assertRecording } from './model.js';
 import { compactObject, id, slugify } from './utils.js';
 import { enrichSkillSemantics } from './intent.js';
 import { enhanceSkillWithAI } from './ai-compiler.js';
+import { analyzeControlFlow } from './control-flow.js';
 
 function parameterName(locator = {}, index = 0) {
   const seed = locator.label || locator.name || locator.placeholder || locator.id || `input_${index + 1}`;
@@ -81,6 +82,7 @@ export function compileRecording(rawRecording) {
     startUrl: recording.startUrl,
     variables,
     steps,
+    controlFlow: analyzeControlFlow(steps),
     createdAt: now,
     updatedAt: now,
     source: {
