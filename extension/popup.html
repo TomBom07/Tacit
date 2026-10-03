@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Tacit</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <main>
+    <header>
+      <div class="mark">T</div>
+      <div><strong>Tacit</strong><span>Teach by doing</span></div>
+      <div id="status" class="status">•</div>
+    </header>
+
+    <section id="idle">
+      <p>Demonstrate a browser task once. Tacit turns it into a reusable skill.</p>
+      <label>Skill name<input id="name" placeholder="e.g. Create Linear issue" /></label>
+      <button id="start">Start teaching</button>
+    </section>
+
+    <section id="recording" hidden>
+      <div class="live"><i></i> Learning your workflow</div>
+      <p>Use the website normally. Tacit is capturing actions and their meaning.</p>
+      <button id="stop" class="secondary">Finish skill</button>
+    </section>
+
+    <section id="learned" hidden>
+      <span class="eyebrow">Latest skill</span>
+      <h2 id="skillName"></h2>
+      <p id="skillMeta"></p>
+    </section>
+
+    <footer><span id="daemon">Runtime offline</span><code>localhost:4317</code></footer>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
