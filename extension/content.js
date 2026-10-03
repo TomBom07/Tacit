@@ -54,6 +54,7 @@ document.addEventListener('click', (event) => {
 document.addEventListener('change', (event) => {
   const target = event.target;
   if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement)) return;
+  if (target instanceof HTMLInputElement && ['checkbox', 'radio'].includes(target.type)) return;
   if (target instanceof HTMLSelectElement) {
     send({ action: 'select', locator: fingerprint(target), value: target.value });
     return;
@@ -91,11 +92,7 @@ function score(expected, candidate) {
 
 function candidateElements(locator) {
   const selectors = [];
-  if (locator.testId) selectors.push(
-    `[data-testid="${CSS.escape(locator.testId)}"]`,
-    `[data-test="${CSS.escape(locator.testId)}"]`,
-    `[data-cy="${CSS.escape(locator.testId)}"]`
-  );
+  if (locator.testId) selectors.push(`[data-testid="${CSS.escape(locator.testId)}"]`, `[data-test="${CSS.escape(locator.testId)}"]`, `[data-cy="${CSS.escape(locator.testId)}"]`);
   if (locator.id) selectors.push(`#${CSS.escape(locator.id)}`);
   if (locator.role) selectors.push(`[role="${CSS.escape(locator.role)}"]`);
   if (locator.tag) selectors.push(locator.tag);
@@ -115,17 +112,9 @@ function resolve(locator, threshold = .58) {
     .sort((a, b) => b.score - a.score);
   const best = ranked[0];
   if (!best || best.score < threshold) {
-    return {
-      element: null,
-      confidence: best?.score || 0,
-      candidates: ranked.slice(0, 3).map(({ fingerprint, score }) => ({ fingerprint, score }))
-    };
+    return { element: null, confidence: best?.score || 0, candidates: ranked.slice(0, 3).map(({ fingerprint, score }) => ({ fingerprint, score })) };
   }
-  return {
-    element: best.element,
-    confidence: best.score,
-    candidates: ranked.slice(0, 3).map(({ fingerprint, score }) => ({ fingerprint, score }))
-  };
+  return { element: best.element, confidence: best.score, candidates: ranked.slice(0, 3).map(({ fingerprint, score }) => ({ fingerprint, score })) };
 }
 
 function resolveVariable(value, variables) {
@@ -135,6 +124,17 @@ function resolveVariable(value, variables) {
   throw new Error(`Missing required variable: ${value.variable}`);
 }
 
+function setNativeValue(element, value) {
+  const prototype = element instanceof HTMLTextAreaElement
+    ? HTMLTextAreaElement.prototype
+    : element instanceof HTMLSelectElement
+      ? HTMLSelectElement.prototype
+      : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+  if (setter) setter.call(element, value);
+  else element.value = value;
+}
+
 async function execute(step, variables) {
   if (step.action === 'wait') {
     await new Promise((resolve) => setTimeout(resolve, step.milliseconds || 500));
@@ -142,25 +142,18 @@ async function execute(step, variables) {
   }
 
   const match = resolve(step.locator || {}, .58);
-  if (!match.element) {
-    return {
-      ok: false,
-      reason: 'No confident semantic match.',
-      confidence: match.confidence,
-      candidates: match.candidates
-    };
-  }
+  if (!match.element) return { ok: false, reason: 'No confident semantic match.', confidence: match.confidence, candidates: match.candidates };
   const element = match.element;
 
   if (step.action === 'click' || step.action === 'submit') element.click();
   else if (step.action === 'input') {
     const value = resolveVariable(step.value, variables);
     element.focus();
-    element.value = value;
+    setNativeValue(element, value);
     element.dispatchEvent(new Event('input', { bubbles: true }));
     element.dispatchEvent(new Event('change', { bubbles: true }));
   } else if (step.action === 'select') {
-    element.value = resolveVariable(step.value, variables);
+    setNativeValue(element, resolveVariable(step.value, variables));
     element.dispatchEvent(new Event('change', { bubbles: true }));
   } else if (step.action === 'keypress') {
     element.focus();
