@@ -5,6 +5,13 @@ function hasDefault(definition) {
 function coerce(name, definition, value) {
   const type = definition?.type || 'string';
 
+  if (Array.isArray(definition?.enum)) {
+    if (!definition.enum.includes(value)) {
+      throw new Error(`Variable ${name} must be one of: ${definition.enum.join(', ')}.`);
+    }
+    return value;
+  }
+
   if (type === 'string') {
     if (typeof value === 'string') return value;
     throw new Error(`Variable ${name} must be a string.`);
@@ -22,13 +29,6 @@ function coerce(name, definition, value) {
     if (!Number.isFinite(number)) throw new Error(`Variable ${name} must be a number.`);
     if (type === 'integer' && !Number.isInteger(number)) throw new Error(`Variable ${name} must be an integer.`);
     return number;
-  }
-
-  if (Array.isArray(definition?.enum)) {
-    if (!definition.enum.includes(value)) {
-      throw new Error(`Variable ${name} must be one of: ${definition.enum.join(', ')}.`);
-    }
-    return value;
   }
 
   return value;
