@@ -1,6 +1,22 @@
 const API = 'http://127.0.0.1:4317';
 let session = null;
 let polling = false;
+let sessionWrites = Promise.resolve();
+
+async function restoreSession() {
+  if (session) return session;
+  const saved = await chrome.storage.local.get('recordingSession');
+  session = saved.recordingSession || null;
+  return session;
+}
+
+function persistSession() {
+  sessionWrites = sessionWrites.then(() => chrome.storage.local.set({
+    recording: Boolean(session),
+    recordingSession: session
+  }));
+  return sessionWrites;
+}
 
 async function api(path, options = {}) {
   const response = await fetch(`${API}${path}`, {
@@ -12,7 +28,8 @@ async function api(path, options = {}) {
 }
 
 async function state() {
-  const saved = await chrome.storage.local.get(['recording', 'lastSkill']);
+  await restoreSession();
+  const saved = await chrome.storage.local.get(['lastSkill']);
   return { recording: Boolean(session), session, lastSkill: saved.lastSkill || null, daemon: await health() };
 }
 
@@ -22,8 +39,14 @@ async function health() {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'TACIT_EVENT') {
-    if (session && sender.tab?.id === session.tabId) session.events.push(message.event);
-    return;
+    restoreSession().then(async () => {
+      if (session && sender.tab?.id === session.tabId) {
+        session.events.push(message.event);
+        await persistSession();
+      }
+      sendResponse({ ok: true });
+    }).catch((error) => sendResponse({ ok: false, error: error.message }));
+    return true;
   }
 
   if (message.type === 'TACIT_STATE') {
@@ -35,35 +58,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
       if (!tab?.id || !tab.url) throw new Error('No active browser tab.');
       session = { name: message.name || 'Untitled workflow', tabId: tab.id, startUrl: tab.url, events: [], startedAt: Date.now() };
-      return chrome.storage.local.set({ recording: true });
+      return persistSession();
     }).then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
   }
 
   if (message.type === 'TACIT_STOP') {
-    const finished = session;
-    session = null;
-    chrome.storage.local.set({ recording: false });
-    if (!finished) { sendResponse({ ok: false, error: 'Nothing is being recorded.' }); return; }
-    api('/recordings', { method: 'POST', body: JSON.stringify(finished) })
-      .then(async ({ skill }) => { await chrome.storage.local.set({ lastSkill: skill }); sendResponse({ ok: true, skill }); })
-      .catch((error) => sendResponse({ ok: false, error: error.message }));
+    restoreSession().then(async () => {
+      const finished = session;
+      session = null;
+      await persistSession();
+      if (!finished) { sendResponse({ ok: false, error: 'Nothing is being recorded.' }); return; }
+      const { skill } = await api('/recordings', { method: 'POST', body: JSON.stringify(finished) });
+      await chrome.storage.local.set({ lastSkill: skill });
+      sendResponse({ ok: true, skill });
+    }).catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
   }
 });
 
 chrome.webNavigation.onCommitted.addListener((details) => {
-  if (!session || details.tabId !== session.tabId || details.frameId !== 0) return;
-  if (details.url === session.startUrl && session.events.length === 0) return;
-  session.events.push({ action: 'navigate', url: details.url, at: Date.now() });
+  restoreSession().then(async () => {
+    if (!session || details.tabId !== session.tabId || details.frameId !== 0) return;
+    if (details.url === session.startUrl && session.events.length === 0) return;
+    session.events.push({ action: 'navigate', url: details.url, at: Date.now() });
+    await persistSession();
+  }).catch(() => {});
 });
 
 function waitForLoad(tabId, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(listener);
-      reject(new Error('Navigation timed out.'));
-    }, timeoutMs);
+    const timeout = setTimeout(() => { chrome.tabs.onUpdated.removeListener(listener); reject(new Error('Navigation timed out.')); }, timeoutMs);
     const listener = (updatedTabId, info) => {
       if (updatedTabId === tabId && info.status === 'complete') {
         clearTimeout(timeout);
@@ -96,38 +121,20 @@ async function executeRun(run) {
 
     let result;
     try {
-      result = await chrome.tabs.sendMessage(tab.id, {
-        type: 'TACIT_EXECUTE_STEP',
-        step,
-        variables: run.variables || {}
-      });
+      result = await chrome.tabs.sendMessage(tab.id, { type: 'TACIT_EXECUTE_STEP', step, variables: run.variables || {} });
     } catch {
       await new Promise((resolve) => setTimeout(resolve, 350));
-      result = await chrome.tabs.sendMessage(tab.id, {
-        type: 'TACIT_EXECUTE_STEP',
-        step,
-        variables: run.variables || {}
-      });
+      result = await chrome.tabs.sendMessage(tab.id, { type: 'TACIT_EXECUTE_STEP', step, variables: run.variables || {} });
     }
     log.push({ index, action: step.action, ...result });
     if (!result?.ok) {
-      await api(`/runs/${run.id}/result`, {
-        method: 'POST',
-        body: JSON.stringify({
-          status: 'blocked',
-          log,
-          error: result?.reason || 'Replay blocked.'
-        })
-      });
+      await api(`/runs/${run.id}/result`, { method: 'POST', body: JSON.stringify({ status: 'blocked', log, error: result?.reason || 'Replay blocked.' }) });
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 220));
   }
 
-  await api(`/runs/${run.id}/result`, {
-    method: 'POST',
-    body: JSON.stringify({ status: 'completed', log })
-  });
+  await api(`/runs/${run.id}/result`, { method: 'POST', body: JSON.stringify({ status: 'completed', log }) });
 }
 
 async function poll() {
@@ -143,4 +150,11 @@ async function poll() {
   }
 }
 
+chrome.alarms.create('tacit-poll', { periodInMinutes: 0.5 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'tacit-poll') poll();
+});
+chrome.runtime.onStartup.addListener(poll);
+chrome.runtime.onInstalled.addListener(poll);
+restoreSession().catch(() => {});
 setInterval(poll, 1100);
