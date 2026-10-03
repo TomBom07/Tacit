@@ -31,3 +31,17 @@ test('never stores demonstrated password values', () => {
   assert.equal('default' in skill.variables.password, false);
   assert.equal('default' in skill.steps[0].value, false);
 });
+
+
+test('collapses accidental duplicate clicks on the same semantic target', () => {
+  const target = { tag: 'input', role: 'checkbox', label: 'Remember me' };
+  const skill = compileRecording({
+    name: 'Remember me',
+    startUrl: 'https://example.com',
+    events: [
+      { action: 'click', locator: target, at: 1000 },
+      { action: 'click', locator: target, at: 1100 }
+    ]
+  });
+  assert.equal(skill.steps.length, 1);
+});
