@@ -21,6 +21,7 @@ function normalizeState(state) {
 export class Store {
   constructor(file = process.env.TACIT_STORE || path.join(os.homedir(), '.tacit', 'store.json')) {
     this.file = file;
+    this.ephemeralSecrets = new Map();
   }
 
   async read() {
@@ -77,15 +78,30 @@ export class Store {
 
   async queueRun(skill, variables = {}) {
     const state = await this.read();
+    const secretNames = Object.entries(skill.variables || {})
+      .filter(([, definition]) => definition?.secret)
+      .map(([name]) => name);
+    const persistentVariables = { ...variables };
+    const secrets = {};
+
+    for (const name of secretNames) {
+      if (Object.hasOwn(persistentVariables, name)) {
+        secrets[name] = persistentVariables[name];
+        delete persistentVariables[name];
+      }
+    }
+
     const run = {
       id: id('run'),
       skillId: skill.id,
       skill,
-      variables,
+      variables: persistentVariables,
+      secretVariableNames: secretNames,
       status: 'queued',
       createdAt: new Date().toISOString(),
       log: []
     };
+    if (Object.keys(secrets).length) this.ephemeralSecrets.set(run.id, secrets);
     state.runs.push(run);
     await this.write(state);
     return run;
@@ -95,10 +111,28 @@ export class Store {
     const state = await this.read();
     const run = state.runs.find((item) => item.status === 'queued');
     if (!run) return null;
+
+    const requiredSecrets = run.secretVariableNames || [];
+    const secrets = this.ephemeralSecrets.get(run.id) || {};
+    const missingSecrets = requiredSecrets.filter((name) => !Object.hasOwn(secrets, name));
+
+    if (missingSecrets.length) {
+      run.status = 'blocked';
+      run.error = `Secret input expired: ${missingSecrets.join(', ')}. Queue the run again.`;
+      run.finishedAt = new Date().toISOString();
+      await this.write(state);
+      return null;
+    }
+
     run.status = 'running';
     run.startedAt = new Date().toISOString();
     await this.write(state);
-    return run;
+
+    this.ephemeralSecrets.delete(run.id);
+    return {
+      ...run,
+      variables: { ...run.variables, ...secrets }
+    };
   }
 
   async getRun(runId) {
