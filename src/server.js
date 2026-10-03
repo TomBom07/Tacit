@@ -11,7 +11,7 @@ function allowedOrigin(origin) {
   return false;
 }
 
-function reply(status, value, origin = null) {
+function sendJson(res, status, value, origin = null) {
   const body = JSON.stringify(value, null, 2);
   const headers = {
     'content-type': 'application/json; charset=utf-8',
@@ -36,12 +36,12 @@ async function readJson(req) {
 export function createTacitServer({ store = new Store() } = {}) {
   return http.createServer(async (req, res) => {
     const origin = allowedOrigin(req.headers.origin);
-    if (origin === false) return json(res, 403, { error: 'Browser origin is not allowed.' });
+    if (origin === false) return sendJson(res, 403, { error: 'Browser origin is not allowed.' });
 
-    if (req.method === 'OPTIONS') return json(res, 204, {}, origin);
+    if (req.method === 'OPTIONS') return sendJson(res, 204, {}, origin);
     const url = new URL(req.url, 'http://127.0.0.1');
     const parts = url.pathname.split('/').filter(Boolean);
-    const reply = (status, value) => reply(status, value, origin);
+    const reply = (status, value) => sendJson(res, status, value, origin);
 
     try {
       if (req.method === 'GET' && url.pathname === '/health') {
