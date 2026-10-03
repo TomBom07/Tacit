@@ -46,7 +46,8 @@ function send(event) {
 }
 
 document.addEventListener('click', (event) => {
-  const target = event.target?.closest?.('button,a,input,[role],summary,label,[data-testid],[data-test],[data-cy]') || event.target;
+  let target = event.target?.closest?.('button,a,input,[role],summary,label,[data-testid],[data-test],[data-cy]') || event.target;
+  if (target instanceof HTMLLabelElement && target.control) target = target.control;
   if (!(target instanceof Element)) return;
   send({ action: 'click', locator: fingerprint(target) });
 }, true);
@@ -111,10 +112,12 @@ function resolve(locator, threshold = .58) {
     .map((entry) => ({ ...entry, score: score(locator, entry.fingerprint) }))
     .sort((a, b) => b.score - a.score);
   const best = ranked[0];
-  if (!best || best.score < threshold) {
-    return { element: null, confidence: best?.score || 0, candidates: ranked.slice(0, 3).map(({ fingerprint, score }) => ({ fingerprint, score })) };
+  const second = ranked[1];
+  const ambiguous = Boolean(best && second && best.score >= threshold && second.score >= threshold && best.score - second.score < .05);
+  if (!best || best.score < threshold || ambiguous) {
+    return { element: null, confidence: best?.score || 0, ambiguous, candidates: ranked.slice(0, 3).map(({ fingerprint, score }) => ({ fingerprint, score })) };
   }
-  return { element: best.element, confidence: best.score, candidates: ranked.slice(0, 3).map(({ fingerprint, score }) => ({ fingerprint, score })) };
+  return { element: best.element, confidence: best.score, ambiguous: false, candidates: ranked.slice(0, 3).map(({ fingerprint, score }) => ({ fingerprint, score })) };
 }
 
 function resolveVariable(value, variables) {
@@ -142,7 +145,7 @@ async function execute(step, variables) {
   }
 
   const match = resolve(step.locator || {}, .58);
-  if (!match.element) return { ok: false, reason: 'No confident semantic match.', confidence: match.confidence, candidates: match.candidates };
+  if (!match.element) return { ok: false, reason: match.ambiguous ? 'Multiple elements match this step.' : 'No confident semantic match.', confidence: match.confidence, candidates: match.candidates };
   const element = match.element;
 
   if (step.action === 'click' || step.action === 'submit') element.click();
