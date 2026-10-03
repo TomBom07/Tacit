@@ -170,6 +170,44 @@ export function createMcpServer({ store = new Store(), skills = [] } = {}) {
   );
 
   server.registerTool(
+    'tacit_list_runs',
+    {
+      description: 'List recent Tacit runs, optionally filtered by status or skill.',
+      inputSchema: z.object({
+        status: z.string().optional(),
+        skillId: z.string().optional(),
+        limit: z.number().int().min(1).max(200).optional()
+      }).strict(),
+      annotations: { readOnlyHint: true }
+    },
+    async ({ status, skillId, limit }) => {
+      const runs = await store.listRuns({ status, skillId, limit });
+      return {
+        content: [{ type: 'text', text: JSON.stringify(runs, null, 2) }],
+        structuredContent: { runs }
+      };
+    }
+  );
+
+  server.registerTool(
+    'tacit_cancel_run',
+    {
+      description: 'Cancel a queued or currently running Tacit browser procedure.',
+      inputSchema: z.object({ runId: z.string().min(1) }).strict(),
+      annotations: { destructiveHint: false, idempotentHint: true }
+    },
+    async ({ runId }) => {
+      const run = await store.cancelRun(runId);
+      if (!run) return { content: [{ type: 'text', text: 'Run not found.' }], isError: true };
+      const result = { runId: run.id, status: run.status };
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        structuredContent: result
+      };
+    }
+  );
+
+  server.registerTool(
     'tacit_get_run',
     {
       description: 'Read the current status and execution log of a Tacit run.',
