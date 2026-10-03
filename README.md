@@ -2,80 +2,120 @@
 
 **Teach software by doing.**
 
-Tacit records a browser procedure once, compiles the demonstration into a reusable skill, and replays it using semantic element matching instead of brittle coordinates or generated CSS selectors.
+Tacit records a browser procedure, compiles the demonstration into a reusable skill, and replays it using semantic element matching instead of brittle coordinates or generated CSS selectors.
 
-A normal automation says: **click `div:nth-child(4) > button`**.  
-Tacit tries to say: **click the button whose role is `button` and whose meaning is `Send message`.**
+A normal macro remembers **where you clicked**.
 
-That distinction is the product.
+Tacit tries to remember **what you meant to click**.
 
-## What works in this V1
+> Example: click the `button` whose accessible meaning is **Send message**, even if its generated DOM ID changes.
 
-- Chrome MV3 extension records clicks, inputs, selects, Enter presses and navigations.
-- Semantic fingerprints capture role, accessible name, labels, test IDs, placeholder, text and element type.
-- Demonstrations compile into versioned `Skill` JSON.
-- Typed values become reusable parameters automatically.
-- Password values are never persisted.
-- Local runtime stores recordings, skills and runs in `~/.tacit/store.json`.
-- CLI can list, inspect, export and queue learned skills.
-- Replay uses weighted semantic matching and stops on low confidence rather than blindly clicking.
-- Every skill is annotated with step intent, external effects and confirmation requirements.
-- Blocked replays generate reviewable semantic repair proposals instead of silently changing the skill.
-- Learned skills can be exposed directly through an MCP v2 stdio server.
-- An optional AI compiler can improve semantic descriptions without being allowed to change executable behavior.
+## What exists today
+
+Tacit 0.3.0 is a local-first browser automation runtime with:
+
+- Chrome Manifest V3 recorder and replay worker
+- semantic element fingerprints
+- deterministic demonstration compiler
+- reusable typed parameters
+- secret/password handling that never writes run secrets to disk
+- explicit control-flow programs with fixed repeats and guarded branches
+- intent/effect/risk annotations
+- confirmation gates for sending, deleting, publishing, and purchasing
+- optional AI semantic enrichment through strict Structured Outputs
+- reviewable self-repair proposals for UI drift
+- skill revision and repair history
+- portable `.tacit.json` skill bundles
+- local HTTP API
+- CLI
+- live-updating MCP v2 server
+- run history and cancellation
 
 ## Quick start
 
 Requires Node.js 20+ and Chromium/Chrome.
 
 ```bash
+git clone https://github.com/TomBom07/Tacit.git
+cd Tacit
 npm install
 npm start
 ```
 
-Then open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select the `extension/` folder.
+Then:
 
-1. Open the site you want to teach.
-2. Open Tacit and name the skill.
-3. Press **Start teaching**.
-4. Perform the task normally.
-5. Press **Finish skill**.
+1. Open `chrome://extensions`.
+2. Enable **Developer mode**.
+3. Choose **Load unpacked**.
+4. Select the repository's `extension/` directory.
+5. Open a site you want to teach.
+6. Open Tacit.
+7. Name the skill.
+8. Press **Start teaching**.
+9. Perform the task normally.
+10. Press **Finish skill**.
 
-Inspect what Tacit learned:
+Tacit stores local state at:
+
+```text
+~/.tacit/store.json
+```
+
+Override it with `TACIT_STORE`.
+
+## Use a learned skill
+
+List and inspect skills:
 
 ```bash
 node src/cli.js list
-node src/cli.js show <skill-id>
-node src/cli.js tool <skill-id>
+node src/cli.js show <skill-id-or-slug>
+node src/cli.js tool <skill-id-or-slug>
 ```
 
-Replay it:
+Queue a run:
 
 ```bash
-node src/cli.js run <skill-id> email=you@example.com title="Hello"
-
-# For a skill that sends, deletes, publishes or purchases:
-node src/cli.js run <skill-id> message="Hello" --confirm
+node src/cli.js run <skill-id-or-slug> title="Hello"
 ```
 
-Keep Chrome open with the extension enabled. The extension claims the queued run from the local runtime and executes it in the active tab.
+For a skill with a protected external effect:
 
-## The skill format
+```bash
+node src/cli.js run <skill-id-or-slug> message="Hello" --confirm
+```
+
+Inspect or cancel runs:
+
+```bash
+node src/cli.js runs
+node src/cli.js runs --status running
+node src/cli.js cancel <run-id>
+```
+
+Keep Chrome open with the Tacit extension enabled. The extension claims queued runs from the local runtime.
+
+## Skill model
+
+A skill preserves the original compiled steps and also contains an executable control-flow program.
 
 ```json
 {
+  "schemaVersion": 2,
   "id": "skill_...",
   "name": "Create issue",
+  "revision": 1,
   "startUrl": "https://example.com/issues/new",
   "variables": {
     "title": {
       "type": "string",
-      "description": "Title",
+      "description": "Issue title",
       "default": "Fix checkout regression"
     }
   },
   "steps": [
     {
+      "id": "step_...",
       "action": "input",
       "locator": {
         "role": "textbox",
@@ -84,85 +124,235 @@ Keep Chrome open with the extension enabled. The extension claims the queued run
       "value": {
         "variable": "title",
         "default": "Fix checkout regression"
+      },
+      "intent": {
+        "effect": "enter_data",
+        "risk": "low"
       }
     }
-  ]
+  ],
+  "controlFlow": {
+    "version": 1,
+    "program": [
+      {
+        "type": "step",
+        "stepId": "step_..."
+      }
+    ]
+  }
 }
 ```
 
-## Local API
+See [Control flow](docs/CONTROL_FLOW.md).
 
-The runtime listens on `127.0.0.1:4317`.
+## Semantic replay
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/health` | Runtime health |
-| `POST` | `/recordings` | Save + compile a demonstration |
-| `GET` | `/skills` | List learned skills |
-| `GET` | `/skills/:id` | Read a skill |
-| `GET` | `/skills/:id/tool` | Agent tool definition |
-| `POST` | `/runs` | Queue a skill run |
-| `GET` | `/runs/:id` | Inspect a run |
-| `GET` | `/repairs` | List repair proposals |
-| `POST` | `/repairs/:id/apply` | Apply an approved repair |
-| `POST` | `/repairs/:id/reject` | Reject a repair |
+A recorded element fingerprint can contain:
 
-## Agent use through MCP
+- role
+- accessible name
+- label
+- test ID
+- placeholder
+- visible text
+- element type
+- tag
+- href
+- DOM ID
 
-Tacit now exposes learned browser procedures over the current MCP stdio transport.
+Replay uses weighted semantic similarity across these fields.
 
-```bash
-npm run mcp
-```
+Tacit blocks rather than guessing when:
 
-The MCP server snapshots the skills available at startup and registers each one as a tool. Restart the MCP process after teaching a new skill.
+- the best candidate is below the confidence threshold; or
+- two candidates are both strong and too close to distinguish safely.
 
-Skills with external effects require an explicit `_confirm: true` argument before they can be queued. Tacit also exposes `tacit_list_skills` and `tacit_get_run`.
+## Self-repair
 
-## Intent-aware compilation
+When replay is blocked, Tacit can persist a repair proposal containing:
 
-Every skill now receives deterministic semantic metadata: its goal, each step's target/effect/risk, and which effects require confirmation.
+- original locator
+- proposed locator
+- confidence
+- margin over the next candidate
+- ambiguity
+- originating run and step
 
-An optional AI pass can improve descriptions while being prevented from changing executable actions or locators:
-
-```bash
-export TACIT_AI_ENDPOINT="https://your-openai-compatible-endpoint/v1/chat/completions"
-export TACIT_AI_API_KEY="..."
-export TACIT_AI_MODEL="..."
-```
-
-No AI endpoint is required. Without one, compilation stays entirely local.
-
-## Self-repair loop
-
-When a replay is blocked, Tacit stores the best semantic candidates as a repair proposal.
+Review from the Chrome popup, or use:
 
 ```bash
 node src/cli.js repairs
 node src/cli.js repair <repair-id>
 node src/cli.js repair-apply <repair-id> --yes
-# or:
 node src/cli.js repair-reject <repair-id>
 ```
 
-Applying a repair increments the skill revision and records the before/after locator in `repairHistory`. Tacit never applies a repair silently.
+A repair is **never applied automatically**. Applying one increments the skill revision and records the change in `repairHistory`.
 
-See [`docs/INTELLIGENCE.md`](docs/INTELLIGENCE.md) for the trust boundaries.
+## Portable skills
 
-## Safety model
+Export:
 
-Tacit is intentionally conservative when replay confidence is low. It stops on ambiguous targets instead of guessing. Confirmation gates are enforced when a learned skill can send, delete, publish or purchase, and semantic repairs require explicit approval before changing the stored skill.
+```bash
+node src/cli.js export <skill-id-or-slug>
+```
 
-## Run tests
+Import:
+
+```bash
+node src/cli.js import create_issue.tacit.json
+```
+
+Replace an existing skill with the same ID:
+
+```bash
+node src/cli.js import create_issue.tacit.json --replace
+```
+
+Imports validate the skill and its control-flow references before storage.
+
+## MCP
+
+Start the MCP stdio server:
+
+```bash
+npm run mcp
+```
+
+Tacit exposes:
+
+- one dedicated tool for every learned skill
+- `tacit_list_skills`
+- `tacit_run_skill`
+- `tacit_list_runs`
+- `tacit_get_run`
+- `tacit_cancel_run`
+
+The MCP server watches the skill store. Teaching, importing, or repairing a skill updates the live tool registry; connected clients that support tool-list change notifications can refresh without restarting Tacit.
+
+Risky skill tools expose an explicit confirmation field. Tacit refuses to queue protected effects without confirmation.
+
+## Optional AI compiler
+
+Tacit works without AI.
+
+The deterministic compiler remains the execution authority. An optional model can improve:
+
+- overall goal wording
+- descriptions
+- variable descriptions
+- semantic step summaries
+- non-executable branch hints
+- non-executable loop hints
+
+It cannot change:
+
+- action order
+- action types
+- locators
+- URLs
+- demonstrated values
+- step IDs
+- confirmation policy
+- executable control flow
+
+### Responses API
+
+```bash
+export TACIT_AI_PROVIDER=responses
+export TACIT_AI_ENDPOINT=https://api.openai.com/v1/responses
+export TACIT_AI_API_KEY=...
+export TACIT_AI_MODEL=...
+```
+
+### OpenAI-compatible Chat Completions
+
+```bash
+export TACIT_AI_PROVIDER=chat
+export TACIT_AI_ENDPOINT=https://example.com/v1/chat/completions
+export TACIT_AI_API_KEY=...
+export TACIT_AI_MODEL=...
+```
+
+If the model is unavailable or returns invalid structured output, the deterministic skill still compiles.
+
+See [Intelligence layer](docs/INTELLIGENCE.md).
+
+## Local API
+
+Default runtime: `http://127.0.0.1:4317`.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Runtime health |
+| `POST` | `/recordings` | Save and compile a demonstration |
+| `POST` | `/skills/compile` | Compile a stored or supplied recording |
+| `GET` | `/skills` | List skills |
+| `GET` | `/skills/:id` | Read a skill |
+| `GET` | `/skills/:id/tool` | Read the agent tool definition |
+| `POST` | `/runs` | Queue a run |
+| `GET` | `/runs` | List recent runs |
+| `GET` | `/runs/next` | Claim the next queued run |
+| `GET` | `/runs/:id` | Read a run |
+| `POST` | `/runs/:id/cancel` | Cancel a queued/running run |
+| `POST` | `/runs/:id/result` | Submit browser execution result |
+| `GET` | `/repairs` | List repair proposals |
+| `GET` | `/repairs/:id` | Read a repair |
+| `POST` | `/repairs/:id/apply` | Apply an explicitly approved repair |
+| `POST` | `/repairs/:id/reject` | Reject a repair |
+
+Browser requests from normal website origins are rejected. See [Security](SECURITY.md).
+
+## Development
+
+Run the full test suite:
 
 ```bash
 npm test
 ```
 
-## Where this goes
+Run tests plus syntax checks:
 
-The browser V1 is the wedge. The larger idea is a compiler for **tacit human procedures**: demonstrate how work is done, turn that behavior into inspectable software, let agents call it, and repair the procedure when interfaces drift.
+```bash
+npm run check
+```
 
-The long-term ecosystem is closer to **npm for procedures** than another macro recorder: versioned skills, signatures, repair history, permissions, an MCP interface, and eventually cross-application computer-use adapters.
+CI runs on Node 20 and Node 22.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+## Architecture
+
+```text
+human demonstration
+        ↓
+browser recorder
+        ↓
+deterministic compiler
+        ↓
+semantic intent + typed inputs
+        ↓
+control-flow program
+        ↓
+optional bounded AI enrichment
+        ↓
+versioned Tacit skill
+        ↓
+CLI / HTTP / MCP
+        ↓
+browser runner
+        ↓
+semantic matcher
+        ↓
+success ───────────────→ run history
+   │
+   └─ blocked
+        ↓
+repair proposal
+        ↓
+human review
+        ↓
+new skill revision
+```
+
+The larger goal is a compiler for **tacit human procedures**: demonstrate how work is done, turn that behavior into inspectable software, let agents call it, and repair the procedure when interfaces drift.
+
+See [Architecture](docs/ARCHITECTURE.md).
