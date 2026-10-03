@@ -45,7 +45,7 @@ function uniqueToolName(skill, used) {
   return name;
 }
 
-export async function createMcpServer({ store = new Store() } = {}) {
+export function createMcpServer({ store = new Store(), skills = [] } = {}) {
   const server = new McpServer(
     { name: 'tacit', version: '0.2.0' },
     {
@@ -98,7 +98,7 @@ export async function createMcpServer({ store = new Store() } = {}) {
   );
 
   const used = new Set(['tacit_list_skills', 'tacit_get_run']);
-  for (const skill of await store.listSkills()) {
+  for (const skill of skills) {
     const name = uniqueToolName(skill, used);
     const effects = confirmationEffects(skill);
     server.registerTool(
@@ -143,7 +143,8 @@ export async function createMcpServer({ store = new Store() } = {}) {
 
 export async function startMcpServer(options = {}) {
   const store = options.store || new Store();
-  await serveStdio(() => createMcpServer({ store }));
+  const skills = await store.listSkills();
+  await serveStdio(() => createMcpServer({ store, skills }));
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
