@@ -7,7 +7,8 @@ export function skillToToolDefinition(skill) {
   for (const [name, variable] of Object.entries(skill.variables || {})) {
     properties[name] = {
       type: variable.type || 'string',
-      description: variable.description || `Input for ${name}`
+      description: variable.description || `Input for ${name}`,
+      ...(variable.secret ? { writeOnly: true } : {})
     };
     if (variable.required) required.push(name);
   }
