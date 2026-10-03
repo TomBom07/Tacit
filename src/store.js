@@ -19,9 +19,14 @@ function normalizeState(state) {
   };
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class Store {
   constructor(file = process.env.TACIT_STORE || path.join(os.homedir(), '.tacit', 'store.json')) {
     this.file = file;
+    this.lockFile = `${file}.lock`;
     this.ephemeralSecrets = new Map();
   }
 
@@ -36,17 +41,71 @@ export class Store {
 
   async write(state) {
     await fs.mkdir(path.dirname(this.file), { recursive: true });
-    const temporary = `${this.file}.tmp`;
-    await fs.writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
-    await fs.rename(temporary, this.file);
+    const temporary = `${this.file}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
+    try {
+      await fs.writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+      await fs.rename(temporary, this.file);
+    } finally {
+      await fs.rm(temporary, { force: true }).catch(() => {});
+    }
+  }
+
+  async acquireLock({ timeoutMs = 5000, staleMs = 30000 } = {}) {
+    await fs.mkdir(path.dirname(this.file), { recursive: true });
+    const started = Date.now();
+
+    while (true) {
+      try {
+        const handle = await fs.open(this.lockFile, 'wx');
+        await handle.writeFile(JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() }));
+        return async () => {
+          await handle.close().catch(() => {});
+          await fs.rm(this.lockFile, { force: true }).catch(() => {});
+        };
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+
+        try {
+          const stat = await fs.stat(this.lockFile);
+          if (Date.now() - stat.mtimeMs > staleMs) {
+            await fs.rm(this.lockFile, { force: true });
+            continue;
+          }
+        } catch (statError) {
+          if (statError.code === 'ENOENT') continue;
+          throw statError;
+        }
+
+        if (Date.now() - started >= timeoutMs) {
+          throw new Error(`Timed out waiting for Tacit store lock: ${this.lockFile}`);
+        }
+        await sleep(20);
+      }
+    }
+  }
+
+  async mutate(callback) {
+    const release = await this.acquireLock();
+    try {
+      const state = await this.read();
+      const result = await callback(state);
+      await this.write(state);
+      return result;
+    } finally {
+      await release();
+    }
   }
 
   async addRecording(recording) {
-    const state = await this.read();
-    const saved = { ...recording, id: recording.id || id('rec'), createdAt: recording.createdAt || new Date().toISOString() };
-    state.recordings.push(saved);
-    await this.write(state);
-    return saved;
+    return this.mutate(async (state) => {
+      const saved = {
+        ...recording,
+        id: recording.id || id('rec'),
+        createdAt: recording.createdAt || new Date().toISOString()
+      };
+      state.recordings.push(saved);
+      return saved;
+    });
   }
 
   async getRecording(recordingId) {
@@ -54,19 +113,19 @@ export class Store {
   }
 
   async addSkill(skill) {
-    const state = await this.read();
-    state.skills.push(skill);
-    await this.write(state);
-    return skill;
+    return this.mutate(async (state) => {
+      state.skills.push(skill);
+      return skill;
+    });
   }
 
   async updateSkill(skillId, nextSkill) {
-    const state = await this.read();
-    const index = state.skills.findIndex((item) => item.id === skillId);
-    if (index === -1) return null;
-    state.skills[index] = nextSkill;
-    await this.write(state);
-    return nextSkill;
+    return this.mutate(async (state) => {
+      const index = state.skills.findIndex((item) => item.id === skillId);
+      if (index === -1) return null;
+      state.skills[index] = nextSkill;
+      return nextSkill;
+    });
   }
 
   async listSkills() {
@@ -78,7 +137,6 @@ export class Store {
   }
 
   async queueRun(skill, variables = {}) {
-    const state = await this.read();
     const prepared = prepareRunVariables(skill, variables);
     const secretNames = Object.entries(skill.variables || {})
       .filter(([, definition]) => definition?.secret)
@@ -103,38 +161,44 @@ export class Store {
       createdAt: new Date().toISOString(),
       log: []
     };
+
     if (Object.keys(secrets).length) this.ephemeralSecrets.set(run.id, secrets);
-    state.runs.push(run);
-    await this.write(state);
-    return run;
+    try {
+      return await this.mutate(async (state) => {
+        state.runs.push(run);
+        return run;
+      });
+    } catch (error) {
+      this.ephemeralSecrets.delete(run.id);
+      throw error;
+    }
   }
 
   async claimNextRun() {
-    const state = await this.read();
-    const run = state.runs.find((item) => item.status === 'queued');
-    if (!run) return null;
+    return this.mutate(async (state) => {
+      const run = state.runs.find((item) => item.status === 'queued');
+      if (!run) return null;
 
-    const requiredSecrets = run.secretVariableNames || [];
-    const secrets = this.ephemeralSecrets.get(run.id) || {};
-    const missingSecrets = requiredSecrets.filter((name) => !Object.hasOwn(secrets, name));
+      const requiredSecrets = run.secretVariableNames || [];
+      const secrets = this.ephemeralSecrets.get(run.id) || {};
+      const missingSecrets = requiredSecrets.filter((name) => !Object.hasOwn(secrets, name));
 
-    if (missingSecrets.length) {
-      run.status = 'blocked';
-      run.error = `Secret input expired: ${missingSecrets.join(', ')}. Queue the run again.`;
-      run.finishedAt = new Date().toISOString();
-      await this.write(state);
-      return null;
-    }
+      if (missingSecrets.length) {
+        run.status = 'blocked';
+        run.error = `Secret input expired: ${missingSecrets.join(', ')}. Queue the run again.`;
+        run.finishedAt = new Date().toISOString();
+        return null;
+      }
 
-    run.status = 'running';
-    run.startedAt = new Date().toISOString();
-    await this.write(state);
+      run.status = 'running';
+      run.startedAt = new Date().toISOString();
+      this.ephemeralSecrets.delete(run.id);
 
-    this.ephemeralSecrets.delete(run.id);
-    return {
-      ...run,
-      variables: { ...run.variables, ...secrets }
-    };
+      return {
+        ...run,
+        variables: { ...run.variables, ...secrets }
+      };
+    });
   }
 
   async listRuns({ status, skillId, limit = 50 } = {}) {
@@ -150,33 +214,34 @@ export class Store {
   }
 
   async cancelRun(runId) {
-    const state = await this.read();
-    const run = state.runs.find((item) => item.id === runId);
-    if (!run) return null;
-    if (!['queued', 'running'].includes(run.status)) return run;
-    run.status = 'cancelled';
-    run.finishedAt = new Date().toISOString();
-    run.error = null;
-    this.ephemeralSecrets.delete(run.id);
-    await this.write(state);
+    const run = await this.mutate(async (state) => {
+      const found = state.runs.find((item) => item.id === runId);
+      if (!found) return null;
+      if (!['queued', 'running'].includes(found.status)) return found;
+      found.status = 'cancelled';
+      found.finishedAt = new Date().toISOString();
+      found.error = null;
+      return found;
+    });
+    if (run) this.ephemeralSecrets.delete(run.id);
     return run;
   }
 
   async finishRun(runId, patch) {
-    const state = await this.read();
-    const run = state.runs.find((item) => item.id === runId);
-    if (!run) return null;
-    if (run.status === 'cancelled') return run;
-    Object.assign(run, patch, { finishedAt: new Date().toISOString() });
-    await this.write(state);
-    return run;
+    return this.mutate(async (state) => {
+      const run = state.runs.find((item) => item.id === runId);
+      if (!run) return null;
+      if (run.status === 'cancelled') return run;
+      Object.assign(run, patch, { finishedAt: new Date().toISOString() });
+      return run;
+    });
   }
 
   async addRepair(repair) {
-    const state = await this.read();
-    state.repairs.push(repair);
-    await this.write(state);
-    return repair;
+    return this.mutate(async (state) => {
+      state.repairs.push(repair);
+      return repair;
+    });
   }
 
   async getRepair(repairId) {
@@ -191,11 +256,11 @@ export class Store {
   }
 
   async updateRepair(repairId, patch) {
-    const state = await this.read();
-    const repair = state.repairs.find((item) => item.id === repairId);
-    if (!repair) return null;
-    Object.assign(repair, patch, { updatedAt: new Date().toISOString() });
-    await this.write(state);
-    return repair;
+    return this.mutate(async (state) => {
+      const repair = state.repairs.find((item) => item.id === repairId);
+      if (!repair) return null;
+      Object.assign(repair, patch, { updatedAt: new Date().toISOString() });
+      return repair;
+    });
   }
 }
