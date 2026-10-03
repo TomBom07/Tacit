@@ -167,7 +167,48 @@ async function execute(step, variables) {
   return { ok: true, confidence: match.confidence };
 }
 
+
+
+function evaluateCondition(condition, variables = {}) {
+  if (!condition || typeof condition !== 'object') return false;
+
+  if (condition.type === 'variableEquals') {
+    return Object.prototype.hasOwnProperty.call(variables, condition.name) &&
+      variables[condition.name] === condition.value;
+  }
+
+  if (condition.type === 'urlIncludes') {
+    return location.href.includes(String(condition.value || ''));
+  }
+
+  if (condition.type === 'urlMatches') {
+    try { return new RegExp(condition.pattern).test(location.href); }
+    catch { return false; }
+  }
+
+  if (condition.type === 'elementExists') {
+    return Boolean(resolve(condition.locator || {}, condition.threshold || .58).element);
+  }
+
+  if (condition.type === 'elementTextIncludes') {
+    const match = resolve(condition.locator || {}, condition.threshold || .58);
+    if (!match.element) return false;
+    return normalize(match.element.innerText || match.element.textContent)
+      .toLowerCase()
+      .includes(normalize(condition.text).toLowerCase());
+  }
+
+  return false;
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === 'TACIT_EVALUATE_CONDITION') {
+    Promise.resolve(evaluateCondition(message.condition, message.variables || {}))
+      .then((value) => sendResponse({ ok: true, value: Boolean(value) }))
+      .catch((error) => sendResponse({ ok: false, reason: error.message }));
+    return true;
+  }
+
   if (message.type !== 'TACIT_EXECUTE_STEP') return;
   execute(message.step, message.variables || {})
     .then(sendResponse)
