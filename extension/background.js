@@ -30,7 +30,18 @@ async function api(path, options = {}) {
 async function state() {
   await restoreSession();
   const saved = await chrome.storage.local.get(['lastSkill']);
-  return { recording: Boolean(session), session, lastSkill: saved.lastSkill || null, daemon: await health() };
+  const daemon = await health();
+  let repairs = [];
+  if (daemon) {
+    try { repairs = (await api('/repairs?status=pending')).repairs || []; } catch {}
+  }
+  return {
+    recording: Boolean(session),
+    session,
+    lastSkill: saved.lastSkill || null,
+    daemon,
+    repairs
+  };
 }
 
 async function health() {
@@ -73,6 +84,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       await chrome.storage.local.set({ lastSkill: skill });
       sendResponse({ ok: true, skill });
     }).catch((error) => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+
+  if (message.type === 'TACIT_REPAIR_APPLY') {
+    api(`/repairs/${message.repairId}/apply`, {
+      method: 'POST',
+      body: JSON.stringify({ approved: true })
+    })
+      .then(async (result) => {
+        if (result.skill) await chrome.storage.local.set({ lastSkill: result.skill });
+        sendResponse({ ok: true, ...result });
+      })
+      .catch((error) => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+
+  if (message.type === 'TACIT_REPAIR_REJECT') {
+    api(`/repairs/${message.repairId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({})
+    })
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
   }
 });
