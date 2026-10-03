@@ -32,7 +32,7 @@ export function createTacitServer({ store = new Store() } = {}) {
 
     try {
       if (req.method === 'GET' && url.pathname === '/health') {
-        return json(res, 200, { ok: true, service: 'tacit', version: 1 });
+        return json(res, 200, { ok: true, service: 'tacit', version: 2 });
       }
 
       if (req.method === 'GET' && url.pathname === '/skills') {
