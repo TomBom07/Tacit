@@ -25,9 +25,11 @@ function dedupe(events) {
   const output = [];
   for (const event of events) {
     const previous = output.at(-1);
-    const sameInput = previous && previous.action === 'input' && event.action === 'input' &&
-      JSON.stringify(previous.locator) === JSON.stringify(event.locator);
-    if (sameInput) output[output.length - 1] = event;
+    const sameTarget = previous && JSON.stringify(previous.locator) === JSON.stringify(event.locator);
+    const sameInput = sameTarget && previous.action === 'input' && event.action === 'input';
+    const duplicateClick = sameTarget && previous.action === 'click' && event.action === 'click' &&
+      Math.abs((event.at || 0) - (previous.at || 0)) < 300;
+    if (sameInput || duplicateClick) output[output.length - 1] = event;
     else output.push(event);
   }
   return output;
