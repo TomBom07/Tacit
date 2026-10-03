@@ -19,14 +19,17 @@ That distinction is the product.
 - Local runtime stores recordings, skills and runs in `~/.tacit/store.json`.
 - CLI can list, inspect, export and queue learned skills.
 - Replay uses weighted semantic matching and stops on low confidence rather than blindly clicking.
-- Every skill can be exposed as an agent-style tool with a JSON Schema input contract.
-- Zero runtime npm dependencies.
+- Every skill is annotated with step intent, external effects and confirmation requirements.
+- Blocked replays generate reviewable semantic repair proposals instead of silently changing the skill.
+- Learned skills can be exposed directly through an MCP v2 stdio server.
+- An optional AI compiler can improve semantic descriptions without being allowed to change executable behavior.
 
 ## Quick start
 
 Requires Node.js 20+ and Chromium/Chrome.
 
 ```bash
+npm install
 npm start
 ```
 
@@ -50,6 +53,9 @@ Replay it:
 
 ```bash
 node src/cli.js run <skill-id> email=you@example.com title="Hello"
+
+# For a skill that sends, deletes, publishes or purchases:
+node src/cli.js run <skill-id> message="Hello" --confirm
 ```
 
 Keep Chrome open with the extension enabled. The extension claims the queued run from the local runtime and executes it in the active tab.
@@ -97,10 +103,55 @@ The runtime listens on `127.0.0.1:4317`.
 | `GET` | `/skills/:id/tool` | Agent tool definition |
 | `POST` | `/runs` | Queue a skill run |
 | `GET` | `/runs/:id` | Inspect a run |
+| `GET` | `/repairs` | List repair proposals |
+| `POST` | `/repairs/:id/apply` | Apply an approved repair |
+| `POST` | `/repairs/:id/reject` | Reject a repair |
+
+## Agent use through MCP
+
+Tacit now exposes learned browser procedures over the current MCP stdio transport.
+
+```bash
+npm run mcp
+```
+
+The MCP server snapshots the skills available at startup and registers each one as a tool. Restart the MCP process after teaching a new skill.
+
+Skills with external effects require an explicit `_confirm: true` argument before they can be queued. Tacit also exposes `tacit_list_skills` and `tacit_get_run`.
+
+## Intent-aware compilation
+
+Every skill now receives deterministic semantic metadata: its goal, each step's target/effect/risk, and which effects require confirmation.
+
+An optional AI pass can improve descriptions while being prevented from changing executable actions or locators:
+
+```bash
+export TACIT_AI_ENDPOINT="https://your-openai-compatible-endpoint/v1/chat/completions"
+export TACIT_AI_API_KEY="..."
+export TACIT_AI_MODEL="..."
+```
+
+No AI endpoint is required. Without one, compilation stays entirely local.
+
+## Self-repair loop
+
+When a replay is blocked, Tacit stores the best semantic candidates as a repair proposal.
+
+```bash
+node src/cli.js repairs
+node src/cli.js repair <repair-id>
+node src/cli.js repair-apply <repair-id> --yes
+# or:
+node src/cli.js repair-reject <repair-id>
+```
+
+Applying a repair increments the skill revision and records the before/after locator in `repairHistory`. Tacit never applies a repair silently.
+
+See [`docs/INTELLIGENCE.md`](docs/INTELLIGENCE.md) for the trust boundaries.
 
 ## Safety model
 
-Tacit is intentionally conservative when replay confidence is low. V1 stops on ambiguous targets instead of guessing. The skill schema already reserves policy controls for confirmation gates around irreversible actions such as sending, deleting, publishing and purchasing.
+Tacit is intentionally conservative when replay confidence is low. It stops on ambiguous targets instead of guessing. Confirmation gates are enforced when a learned skill can send, delete, publish or purchase, and semantic repairs require explicit approval before changing the stored skill.
 
 ## Run tests
 
